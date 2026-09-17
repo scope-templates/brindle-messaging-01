@@ -1,0 +1,47 @@
+{
+  "name": "@brindle/node",
+  "version": "0.9.2",
+  "description": "Node client for the Brindle transactional messaging API",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run --root ../.. clients/node/test"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "vitest": "3.2.7"
+  },
+  "keywords": [
+    "brindle",
+    "email",
+    "sms",
+    "transactional"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/brindlehq/brindle.git",
+    "directory": "clients/node"
+  },
+  "homepage": "https://docs.brindle.dev",
+  "publishConfig": {
+    "access": "public"
+  }
+}

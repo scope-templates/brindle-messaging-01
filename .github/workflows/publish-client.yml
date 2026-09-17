@@ -1,0 +1,33 @@
+name: publish-client
+
+on:
+  push:
+    tags: ['client-v*']
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npx tsc -p clients/node/tsconfig.json
+      - name: Check the tag against the package version
+        run: |
+          tagged="${GITHUB_REF_NAME#client-v}"
+          packaged="$(node -p "require('./clients/node/package.json').version")"
+          if [ "$tagged" != "$packaged" ]; then
+            echo "tag $GITHUB_REF_NAME does not match clients/node version $packaged"
+            exit 1
+          fi
+      - run: npm publish
+        working-directory: clients/node
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

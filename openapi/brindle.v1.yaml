@@ -1,0 +1,1587 @@
+openapi: 3.1.0
+info:
+  title: Brindle
+  version: '2026-06-15'
+  summary: Transactional email and SMS over one HTTP API.
+  description: |
+    Brindle takes a message, renders it, hands it to a carrier and tells you what happened to it.
+
+    Every request under `/v1` carries `Authorization: Bearer <key>`. Keys begin `bk_live_` or
+    `bk_test_`; a test key is accepted and everything it does is recorded, and nothing leaves
+    Brindle. Every answer carries `Brindle-Version`, which is the dated version of the API this
+    deployment speaks, and the `X-RateLimit-*` headers for the account the key belongs to.
+
+    Refusals are the same object everywhere: `type`, `title`, `status`, `detail` and `code`. Branch
+    on `code`; `detail` is written for a person and may be reworded.
+  contact:
+    name: Brindle support
+    email: support@brindle.dev
+    url: https://docs.brindle.dev
+servers:
+  - url: https://api.brindle.dev
+    description: Production
+security:
+  - bearerAuth: []
+tags:
+  - name: Messages
+    description: Sending, reading back, and what happened afterwards.
+  - name: Templates
+    description: Wording held by Brindle, with a version history.
+  - name: Suppressions
+    description: Addresses this account must not write to.
+  - name: Webhooks
+    description: Endpoints Brindle posts events to.
+  - name: Account
+    description: Plan, limits and the month so far.
+
+paths:
+  /health:
+    get:
+      summary: Health check
+      operationId: health
+      tags: [Account]
+      security: []
+      responses:
+        '200':
+          description: Brindle is up.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, version, build]
+                properties:
+                  status:
+                    type: string
+                    examples: [ok]
+                  version:
+                    type: string
+                    description: The dated version of the API this deployment speaks.
+                    examples: ['2026-06-15']
+                  build:
+                    type: string
+                    description: Which build is answering.
+                    examples: ['2.8.0']
+
+  /openapi.yaml:
+    get:
+      summary: This document
+      operationId: spec
+      tags: [Account]
+      security: []
+      responses:
+        '200':
+          description: The OpenAPI description of the version this deployment speaks.
+          headers:
+            Brindle-Version:
+              $ref: '#/components/headers/BrindleVersion'
+          content:
+            application/yaml:
+              schema:
+                type: string
+
+  /v1/messages:
+    post:
+      summary: Send a message
+      operationId: sendMessage
+      tags: [Messages]
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SendRequest'
+            examples:
+              fromATemplate:
+                summary: From a template
+                value:
+                  to: esme.ingham@brookmail.com
+                  channel: email
+                  template_id: tmpl_13jprr39jzhs
+                  variables:
+                    first_name: Esme
+                    order_number: W-4410
+                  tags: [delivery]
+              writtenOut:
+                summary: Written out in the request
+                value:
+                  to: '+447700900123'
+                  channel: sms
+                  body: Your bike is ready to collect until Saturday.
+      responses:
+        '201':
+          description: The message was accepted and is queued.
+          headers:
+            Brindle-Version:
+              $ref: '#/components/headers/BrindleVersion'
+            Idempotency-Replayed:
+              $ref: '#/components/headers/IdempotencyReplayed'
+            X-RateLimit-Limit:
+              $ref: '#/components/headers/RateLimitLimit'
+            X-RateLimit-Remaining:
+              $ref: '#/components/headers/RateLimitRemaining'
+            X-RateLimit-Reset:
+              $ref: '#/components/headers/RateLimitReset'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+    get:
+      summary: List messages
+      operationId: listMessages
+      tags: [Messages]
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/MessageStatus'
+        - name: channel
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/Channel'
+      responses:
+        '200':
+          description: A page of messages, newest first.
+          headers:
+            Brindle-Version:
+              $ref: '#/components/headers/BrindleVersion'
+            X-RateLimit-Limit:
+              $ref: '#/components/headers/RateLimitLimit'
+            X-RateLimit-Remaining:
+              $ref: '#/components/headers/RateLimitRemaining'
+            X-RateLimit-Reset:
+              $ref: '#/components/headers/RateLimitReset'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, next_cursor]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Message'
+                  next_cursor:
+                    $ref: '#/components/schemas/NextCursor'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/messages/batch:
+    post:
+      summary: Send up to five hundred messages
+      operationId: sendBatch
+      tags: [Messages]
+      description: |
+        A batch is not all or nothing. Rows that can be sent are sent; rows that cannot come back
+        with their position in the array and the code that row would have been refused with on its
+        own.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [messages]
+              properties:
+                messages:
+                  type: array
+                  minItems: 1
+                  maxItems: 500
+                  items:
+                    $ref: '#/components/schemas/SendRequest'
+            examples:
+              two:
+                value:
+                  messages:
+                    - to: colm.wardle@brookmail.com
+                      channel: email
+                      subject: Your order is ready
+                      body: <p>Come and get it.</p>
+                    - to: '+447700900771'
+                      channel: sms
+                      template_id: tmpl_1hjhpvx6q447
+                      variables:
+                        code: '4471'
+      responses:
+        '202':
+          description: The batch was taken. Read `rejected` before you treat it as sent.
+          headers:
+            Brindle-Version:
+              $ref: '#/components/headers/BrindleVersion'
+            Idempotency-Replayed:
+              $ref: '#/components/headers/IdempotencyReplayed'
+            X-RateLimit-Limit:
+              $ref: '#/components/headers/RateLimitLimit'
+            X-RateLimit-Remaining:
+              $ref: '#/components/headers/RateLimitRemaining'
+            X-RateLimit-Reset:
+              $ref: '#/components/headers/RateLimitReset'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/messages/{id}:
+    parameters:
+      - $ref: '#/components/parameters/MessageId'
+    get:
+      summary: Read one message
+      operationId: getMessage
+      tags: [Messages]
+      responses:
+        '200':
+          description: The message.
+          headers:
+            Brindle-Version:
+              $ref: '#/components/headers/BrindleVersion'
+            X-RateLimit-Limit:
+              $ref: '#/components/headers/RateLimitLimit'
+            X-RateLimit-Remaining:
+              $ref: '#/components/headers/RateLimitRemaining'
+            X-RateLimit-Reset:
+              $ref: '#/components/headers/RateLimitReset'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/messages/{id}/events:
+    parameters:
+      - $ref: '#/components/parameters/MessageId'
+    get:
+      summary: What happened to a message
+      operationId: listMessageEvents
+      tags: [Messages]
+      description: |
+        The whole history, oldest first. A message has a handful of events, so this is not a page.
+      responses:
+        '200':
+          description: The events, oldest first.
+          headers:
+            Brindle-Version:
+              $ref: '#/components/headers/BrindleVersion'
+            X-RateLimit-Limit:
+              $ref: '#/components/headers/RateLimitLimit'
+            X-RateLimit-Remaining:
+              $ref: '#/components/headers/RateLimitRemaining'
+            X-RateLimit-Reset:
+              $ref: '#/components/headers/RateLimitReset'
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/MessageEvent'
+              examples:
+                bounced:
+                  value:
+                    - id: evt_7gsp79b2gn3w
+                      type: queued
+                      occurred_at: '2026-09-01T20:56:11.000Z'
+                      detail: null
+                    - id: evt_9nh1ft4swvvm
+                      type: sent
+                      occurred_at: '2026-09-01T20:56:13.000Z'
+                      detail: null
+                    - id: evt_pnf5b6n1zwnq
+                      type: bounced
+                      occurred_at: '2026-09-01T20:56:19.386Z'
+                      detail: The receiving server said the address does not exist.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/templates:
+    post:
+      summary: Create a template
+      operationId: createTemplate
+      tags: [Templates]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTemplate'
+            examples:
+              email:
+                value:
+                  name: Service due
+                  channel: email
+                  subject: Your {{item}} is due a service
+                  body: <p>Hello {{first_name}},</p>
+      responses:
+        '201':
+          description: The template, at version 1.
+          headers:
+            Brindle-Version:
+              $ref: '#/components/headers/BrindleVersion'
+            X-RateLimit-Limit:
+              $ref: '#/components/headers/RateLimitLimit'
+            X-RateLimit-Remaining:
+              $ref: '#/components/headers/RateLimitRemaining'
+            X-RateLimit-Reset:
+              $ref: '#/components/headers/RateLimitReset'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TemplateWithBody'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+    get:
+      summary: List templates
+      operationId: listTemplates
+      tags: [Templates]
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: A page of templates, newest first.
+          headers:
+            Brindle-Version:
+              $ref: '#/components/headers/BrindleVersion'
+            X-RateLimit-Limit:
+              $ref: '#/components/headers/RateLimitLimit'
+            X-RateLimit-Remaining:
+              $ref: '#/components/headers/RateLimitRemaining'
+            X-RateLimit-Reset:
+              $ref: '#/components/headers/RateLimitReset'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, next_cursor]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Template'
+                  next_cursor:
+                    $ref: '#/components/schemas/NextCursor'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/templates/{id}:
+    parameters:
+      - $ref: '#/components/parameters/TemplateId'
+    get:
+      summary: Read one template
+      operationId: getTemplate
+      tags: [Templates]
+      responses:
+        '200':
+          description: The template and the wording of its current version.
+          headers:
+            Brindle-Version:
+              $ref: '#/components/headers/BrindleVersion'
+            X-RateLimit-Limit:
+              $ref: '#/components/headers/RateLimitLimit'
+            X-RateLimit-Remaining:
+              $ref: '#/components/headers/RateLimitRemaining'
+            X-RateLimit-Reset:
+              $ref: '#/components/headers/RateLimitReset'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TemplateWithBody'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+    put:
+      summary: Write a new version of a template
+      operationId: updateTemplate
+      tags: [Templates]
+      description: |
+        The wording is never edited in place. A `PUT` writes the next version and points the
+        template at it; older versions stay readable.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateTemplate'
+      responses:
+        '200':
+          description: The template, now at the new version.
+          headers:
+            Brindle-Version:
+              $ref: '#/components/headers/BrindleVersion'
+            X-RateLimit-Limit:
+              $ref: '#/components/headers/RateLimitLimit'
+            X-RateLimit-Remaining:
+              $ref: '#/components/headers/RateLimitRemaining'
+            X-RateLimit-Reset:
+              $ref: '#/components/headers/RateLimitReset'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TemplateWithBody'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/templates/{id}/versions:
+    parameters:
+      - $ref: '#/components/parameters/TemplateId'
+    get:
+      summary: The versions of a template
+      operationId: listTemplateVersions
+      tags: [Templates]
+      responses:
+        '200':
+          description: Every version, oldest first.
+          headers:
+            Brindle-Version:
+              $ref: '#/components/headers/BrindleVersion'
+            X-RateLimit-Limit:
+              $ref: '#/components/headers/RateLimitLimit'
+            X-RateLimit-Remaining:
+              $ref: '#/components/headers/RateLimitRemaining'
+            X-RateLimit-Reset:
+              $ref: '#/components/headers/RateLimitReset'
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TemplateVersion'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/templates/{id}/render:
+    parameters:
+      - $ref: '#/components/parameters/TemplateId'
+    post:
+      summary: Render a template without sending it
+      operationId: renderTemplate
+      tags: [Templates]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                variables:
+                  $ref: '#/components/schemas/Variables'
+                version:
+                  type: integer
+                  minimum: 1
+                  description: The version to render. The current one otherwise.
+            examples:
+              current:
+                value:
+                  variables:
+                    first_name: Esme
+                    order_number: W-4410
+      responses:
+        '200':
+          description: The rendered wording.
+          headers:
+            Brindle-Version:
+              $ref: '#/components/headers/BrindleVersion'
+            X-RateLimit-Limit:
+              $ref: '#/components/headers/RateLimitLimit'
+            X-RateLimit-Remaining:
+              $ref: '#/components/headers/RateLimitRemaining'
+            X-RateLimit-Reset:
+              $ref: '#/components/headers/RateLimitReset'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [subject, body, template_id, version]
+                properties:
+                  subject:
+                    type: [string, 'null']
+                  body:
+                    type: string
+                  template_id:
+                    type: string
+                  version:
+                    type: integer
+              examples:
+                rendered:
+                  value:
+                    subject: W-4410 is on its way
+                    body: <p>Hi Esme,</p>
+                    template_id: tmpl_13jprr39jzhs
+                    version: 2
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/suppressions:
+    get:
+      summary: List suppressed addresses
+      operationId: listSuppressions
+      tags: [Suppressions]
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: A page of suppressions, newest first.
+          headers:
+            Brindle-Version:
+              $ref: '#/components/headers/BrindleVersion'
+            X-RateLimit-Limit:
+              $ref: '#/components/headers/RateLimitLimit'
+            X-RateLimit-Remaining:
+              $ref: '#/components/headers/RateLimitRemaining'
+            X-RateLimit-Reset:
+              $ref: '#/components/headers/RateLimitReset'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, next_cursor]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Suppression'
+                  next_cursor:
+                    $ref: '#/components/schemas/NextCursor'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+    post:
+      summary: Suppress an address
+      operationId: createSuppression
+      tags: [Suppressions]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [address]
+              properties:
+                address:
+                  type: string
+                  description: An email address or a phone number in international form.
+                reason:
+                  $ref: '#/components/schemas/SuppressionReason'
+            examples:
+              askedUsToStop:
+                value:
+                  address: zara.tewson@brookmail.com
+                  reason: unsubscribed
+      responses:
+        '201':
+          description: The address is on the list.
+          headers:
+            Brindle-Version:
+              $ref: '#/components/headers/BrindleVersion'
+            X-RateLimit-Limit:
+              $ref: '#/components/headers/RateLimitLimit'
+            X-RateLimit-Remaining:
+              $ref: '#/components/headers/RateLimitRemaining'
+            X-RateLimit-Reset:
+              $ref: '#/components/headers/RateLimitReset'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Suppression'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/suppressions/{address}:
+    parameters:
+      - name: address
+        in: path
+        required: true
+        schema:
+          type: string
+        description: The suppressed address, percent-encoded.
+        example: zara.tewson%40brookmail.com
+    delete:
+      summary: Take an address off the suppression list
+      operationId: deleteSuppression
+      tags: [Suppressions]
+      responses:
+        '204':
+          description: The address is off the list.
+          headers:
+            Brindle-Version:
+              $ref: '#/components/headers/BrindleVersion'
+            X-RateLimit-Limit:
+              $ref: '#/components/headers/RateLimitLimit'
+            X-RateLimit-Remaining:
+              $ref: '#/components/headers/RateLimitRemaining'
+            X-RateLimit-Reset:
+              $ref: '#/components/headers/RateLimitReset'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/webhooks:
+    post:
+      summary: Register an endpoint
+      operationId: createWebhook
+      tags: [Webhooks]
+      description: |
+        The signing secret is in this answer and in no other. Keep it; endpoints are not readable
+        with their secret again.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url, events]
+              properties:
+                url:
+                  type: string
+                  format: uri
+                  description: An https endpoint.
+                events:
+                  type: array
+                  minItems: 1
+                  items:
+                    $ref: '#/components/schemas/EventType'
+            examples:
+              outcomes:
+                value:
+                  url: https://api.wainstall-cycles.co.uk/hooks/brindle
+                  events: [delivered, bounced, failed]
+      responses:
+        '201':
+          description: The endpoint, with its secret.
+          headers:
+            Brindle-Version:
+              $ref: '#/components/headers/BrindleVersion'
+            X-RateLimit-Limit:
+              $ref: '#/components/headers/RateLimitLimit'
+            X-RateLimit-Remaining:
+              $ref: '#/components/headers/RateLimitRemaining'
+            X-RateLimit-Reset:
+              $ref: '#/components/headers/RateLimitReset'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookWithSecret'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+    get:
+      summary: List endpoints
+      operationId: listWebhooks
+      tags: [Webhooks]
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: A page of endpoints, newest first.
+          headers:
+            Brindle-Version:
+              $ref: '#/components/headers/BrindleVersion'
+            X-RateLimit-Limit:
+              $ref: '#/components/headers/RateLimitLimit'
+            X-RateLimit-Remaining:
+              $ref: '#/components/headers/RateLimitRemaining'
+            X-RateLimit-Reset:
+              $ref: '#/components/headers/RateLimitReset'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, next_cursor]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Webhook'
+                  next_cursor:
+                    $ref: '#/components/schemas/NextCursor'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/webhooks/{id}:
+    parameters:
+      - $ref: '#/components/parameters/WebhookId'
+    patch:
+      summary: Turn an endpoint on or off
+      operationId: setWebhookActive
+      tags: [Webhooks]
+      description: |
+        An endpoint that is off keeps its history; deliveries simply stop being written for it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [active]
+              properties:
+                active:
+                  type: boolean
+            examples:
+              off:
+                value:
+                  active: false
+      responses:
+        '200':
+          description: The endpoint as it now stands.
+          headers:
+            Brindle-Version:
+              $ref: '#/components/headers/BrindleVersion'
+            X-RateLimit-Limit:
+              $ref: '#/components/headers/RateLimitLimit'
+            X-RateLimit-Remaining:
+              $ref: '#/components/headers/RateLimitRemaining'
+            X-RateLimit-Reset:
+              $ref: '#/components/headers/RateLimitReset'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Webhook'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+    delete:
+      summary: Remove an endpoint
+      operationId: deleteWebhook
+      tags: [Webhooks]
+      responses:
+        '204':
+          description: The endpoint and its delivery records are gone.
+          headers:
+            Brindle-Version:
+              $ref: '#/components/headers/BrindleVersion'
+            X-RateLimit-Limit:
+              $ref: '#/components/headers/RateLimitLimit'
+            X-RateLimit-Remaining:
+              $ref: '#/components/headers/RateLimitRemaining'
+            X-RateLimit-Reset:
+              $ref: '#/components/headers/RateLimitReset'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/webhooks/{id}/deliveries:
+    parameters:
+      - $ref: '#/components/parameters/WebhookId'
+    get:
+      summary: Deliveries to an endpoint
+      operationId: listWebhookDeliveries
+      tags: [Webhooks]
+      description: Delivery records are kept for a fortnight.
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: A page of delivery records, newest first.
+          headers:
+            Brindle-Version:
+              $ref: '#/components/headers/BrindleVersion'
+            X-RateLimit-Limit:
+              $ref: '#/components/headers/RateLimitLimit'
+            X-RateLimit-Remaining:
+              $ref: '#/components/headers/RateLimitRemaining'
+            X-RateLimit-Reset:
+              $ref: '#/components/headers/RateLimitReset'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, next_cursor]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/WebhookDelivery'
+                  next_cursor:
+                    $ref: '#/components/schemas/NextCursor'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/account:
+    get:
+      summary: The account behind the key
+      operationId: getAccount
+      tags: [Account]
+      responses:
+        '200':
+          description: Plan, limits and the calendar month so far.
+          headers:
+            Brindle-Version:
+              $ref: '#/components/headers/BrindleVersion'
+            X-RateLimit-Limit:
+              $ref: '#/components/headers/RateLimitLimit'
+            X-RateLimit-Remaining:
+              $ref: '#/components/headers/RateLimitRemaining'
+            X-RateLimit-Reset:
+              $ref: '#/components/headers/RateLimitReset'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+webhooks:
+  messageEvent:
+    post:
+      summary: An event, posted to a registered endpoint
+      operationId: messageEvent
+      description: |
+        Brindle posts one of these to every endpoint subscribed to the event's type. Check
+        `Brindle-Signature` against the raw body before parsing it, and answer 2xx within ten
+        seconds. The same event can arrive twice and events can arrive out of order, so key on
+        `id` and make the handler safe to run again.
+      parameters:
+        - name: Brindle-Signature
+          in: header
+          required: true
+          description: |
+            `t=<unix seconds>,v1=<hex>`, where the hex is HMAC-SHA256 of `<t>.<raw body>` under the
+            endpoint's secret. `t` is the second the event happened, and a receiver should refuse a
+            body whose `t` is more than five minutes out.
+          schema:
+            type: string
+          example: t=1788296179,v1=4a21a915917c5a5b53254d94cdf410b814ea2f037529e81411ace48e9ef46716
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EventDelivery'
+            examples:
+              bounced:
+                value:
+                  id: evt_pnf5b6n1zwnq
+                  type: message.bounced
+                  occurred_at: '2026-09-01T20:56:19.386Z'
+                  data:
+                    message_id: msg_901pn19hh7xt
+                    channel: email
+                    to: hafsa.tewson@stonebridge.email
+                    status: bounced
+                    tags: [order, transactional, security]
+                    detail: The receiving server said the address does not exist.
+      responses:
+        '200':
+          description: Taken. Anything other than a 2xx is retried.
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: |
+        `Authorization: Bearer bk_live_...`. A `bk_test_` key is accepted everywhere a live key is,
+        and nothing it sends leaves Brindle.
+
+  parameters:
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      schema:
+        type: string
+      description: The `next_cursor` from the page before this one.
+    Limit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 25
+      description: How many rows to return. Twenty-five otherwise, one hundred at most.
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      schema:
+        type: string
+        maxLength: 255
+      description: |
+        A key of your own. The first request under it is run and its answer kept for a day; a
+        repeat under the same key returns that answer with `Idempotency-Replayed: true`. The same
+        key with a different body is refused with `idempotency_conflict`.
+    MessageId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+      example: msg_901pn19hh7xt
+    TemplateId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+      example: tmpl_13jprr39jzhs
+    WebhookId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+      example: wh_0g389xqn9q
+
+  headers:
+    BrindleVersion:
+      description: The dated version of the API this deployment speaks.
+      schema:
+        type: string
+        examples: ['2026-06-15']
+    IdempotencyReplayed:
+      description: Present and `true` when this answer was kept from an earlier request.
+      schema:
+        type: string
+        examples: ['true']
+    RateLimitLimit:
+      description: Requests this account may make in a window.
+      schema:
+        type: integer
+    RateLimitRemaining:
+      description: Requests left in the current window.
+      schema:
+        type: integer
+    RateLimitReset:
+      description: |
+        The Unix second at which the current window ends. A window opens on the account's first
+        request and runs for a minute.
+      schema:
+        type: integer
+
+  responses:
+    BadRequest:
+      description: The request could not be read.
+      headers:
+        Brindle-Version:
+          $ref: '#/components/headers/BrindleVersion'
+        X-RateLimit-Limit:
+          $ref: '#/components/headers/RateLimitLimit'
+        X-RateLimit-Remaining:
+          $ref: '#/components/headers/RateLimitRemaining'
+        X-RateLimit-Reset:
+          $ref: '#/components/headers/RateLimitReset'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          examples:
+            notAnAddress:
+              value:
+                type: https://docs.brindle.dev/errors/invalid_request
+                title: Invalid request
+                status: 400
+                detail: 'to: "wren at brookmail" is not an email address.'
+                code: invalid_request
+    Unauthorized:
+      description: No key, or a key Brindle does not know.
+      headers:
+        Brindle-Version:
+          $ref: '#/components/headers/BrindleVersion'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          examples:
+            noKey:
+              value:
+                type: https://docs.brindle.dev/errors/authentication_required
+                title: Authentication required
+                status: 401
+                detail: 'Send your key as an Authorization header: `Authorization: Bearer bk_live_...`.'
+                code: authentication_required
+    NotFound:
+      description: There is no such object on this account.
+      headers:
+        Brindle-Version:
+          $ref: '#/components/headers/BrindleVersion'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          examples:
+            noTemplate:
+              value:
+                type: https://docs.brindle.dev/errors/template_not_found
+                title: Template not found
+                status: 404
+                detail: There is no template tmpl_nosuchthing on this account.
+                code: template_not_found
+    Conflict:
+      description: An idempotency key was reused over a different body.
+      headers:
+        Brindle-Version:
+          $ref: '#/components/headers/BrindleVersion'
+        X-RateLimit-Limit:
+          $ref: '#/components/headers/RateLimitLimit'
+        X-RateLimit-Remaining:
+          $ref: '#/components/headers/RateLimitRemaining'
+        X-RateLimit-Reset:
+          $ref: '#/components/headers/RateLimitReset'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Unprocessable:
+      description: The request was read and cannot be carried out.
+      headers:
+        Brindle-Version:
+          $ref: '#/components/headers/BrindleVersion'
+        X-RateLimit-Limit:
+          $ref: '#/components/headers/RateLimitLimit'
+        X-RateLimit-Remaining:
+          $ref: '#/components/headers/RateLimitRemaining'
+        X-RateLimit-Reset:
+          $ref: '#/components/headers/RateLimitReset'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          examples:
+            suppressed:
+              value:
+                type: https://docs.brindle.dev/errors/recipient_suppressed
+                title: Recipient suppressed
+                status: 422
+                detail: ada.wardle@brookmail.com is on your suppression list. Take it off the list if you mean to write to it again.
+                code: recipient_suppressed
+    PayloadTooLarge:
+      description: The request body is larger than this API accepts.
+      headers:
+        Brindle-Version:
+          $ref: '#/components/headers/BrindleVersion'
+        X-RateLimit-Limit:
+          $ref: '#/components/headers/RateLimitLimit'
+        X-RateLimit-Remaining:
+          $ref: '#/components/headers/RateLimitRemaining'
+        X-RateLimit-Reset:
+          $ref: '#/components/headers/RateLimitReset'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          examples:
+            tooBig:
+              value:
+                type: https://docs.brindle.dev/errors/payload_too_large
+                title: Payload too large
+                status: 413
+                detail: That request body is larger than this API accepts.
+                code: payload_too_large
+    RateLimited:
+      description: The account has spent its requests for this window.
+      headers:
+        Retry-After:
+          description: Seconds to wait.
+          schema:
+            type: integer
+        Brindle-Version:
+          $ref: '#/components/headers/BrindleVersion'
+        X-RateLimit-Limit:
+          $ref: '#/components/headers/RateLimitLimit'
+        X-RateLimit-Remaining:
+          $ref: '#/components/headers/RateLimitRemaining'
+        X-RateLimit-Reset:
+          $ref: '#/components/headers/RateLimitReset'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+
+  schemas:
+    Channel:
+      type: string
+      enum: [email, sms]
+
+    MessageStatus:
+      type: string
+      enum: [queued, sent, delivered, bounced, failed]
+
+    EventType:
+      type: string
+      enum: [queued, sent, delivered, bounced, opened, clicked, complaint, failed]
+
+    SuppressionReason:
+      type: string
+      enum: [hard_bounce, complaint, unsubscribed, manual]
+
+    NextCursor:
+      type: [string, 'null']
+      description: Pass this back as `cursor` for the next page. Null on the last page.
+
+    Variables:
+      type: object
+      additionalProperties:
+        type: string
+      description: A value for every `{{placeholder}}` in the template.
+
+    Problem:
+      type: object
+      required: [type, title, status, detail, code]
+      properties:
+        type:
+          type: string
+          format: uri
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        code:
+          type: string
+          description: The stable name of the refusal. Branch on this.
+
+    SendRequest:
+      type: object
+      required: [to, channel]
+      properties:
+        to:
+          type: string
+          description: An email address, or a phone number in international form for `sms`.
+        channel:
+          $ref: '#/components/schemas/Channel'
+        template_id:
+          type: string
+          description: Send the current version of this template. Not with `body`.
+        variables:
+          $ref: '#/components/schemas/Variables'
+        subject:
+          type: string
+          description: Required for an email written out in the request.
+        body:
+          type: string
+          description: The message itself, when it does not come from a template.
+        tags:
+          type: array
+          maxItems: 10
+          items:
+            type: string
+            maxLength: 40
+
+    Message:
+      type: object
+      required:
+        - id
+        - channel
+        - to
+        - template_id
+        - template_version
+        - variables
+        - subject
+        - body
+        - tags
+        - status
+        - batch_id
+        - created_at
+      properties:
+        id:
+          type: string
+          examples: [msg_901pn19hh7xt]
+        channel:
+          $ref: '#/components/schemas/Channel'
+        to:
+          type: string
+        template_id:
+          type: [string, 'null']
+        template_version:
+          type: [integer, 'null']
+        variables:
+          oneOf:
+            - $ref: '#/components/schemas/Variables'
+            - type: 'null'
+        subject:
+          type: [string, 'null']
+        body:
+          type: [string, 'null']
+        tags:
+          type: array
+          items:
+            type: string
+        status:
+          $ref: '#/components/schemas/MessageStatus'
+        batch_id:
+          type: [string, 'null']
+        created_at:
+          type: string
+          format: date-time
+
+    MessageEvent:
+      type: object
+      required: [id, type, occurred_at, detail]
+      properties:
+        id:
+          type: string
+        type:
+          $ref: '#/components/schemas/EventType'
+        occurred_at:
+          type: string
+          format: date-time
+        detail:
+          type: [string, 'null']
+          description: What the carrier said, on a bounce or a failure.
+
+    BatchResult:
+      type: object
+      required: [batch_id, accepted, rejected]
+      properties:
+        batch_id:
+          type: string
+          examples: [batch_qt1tspng4bt8]
+        accepted:
+          type: array
+          items:
+            type: object
+            required: [index, id]
+            properties:
+              index:
+                type: integer
+                description: The row's position in the array that was sent.
+              id:
+                type: string
+        rejected:
+          type: array
+          items:
+            type: object
+            required: [index, code, detail]
+            properties:
+              index:
+                type: integer
+              code:
+                type: string
+              detail:
+                type: string
+
+    CreateTemplate:
+      type: object
+      required: [name, channel, body]
+      properties:
+        name:
+          type: string
+          maxLength: 120
+        channel:
+          $ref: '#/components/schemas/Channel'
+        subject:
+          type: string
+          maxLength: 200
+          description: Required for an email template, and refused on an SMS one.
+        body:
+          type: string
+          maxLength: 100000
+
+    UpdateTemplate:
+      type: object
+      required: [body]
+      properties:
+        name:
+          type: string
+          maxLength: 120
+        subject:
+          type: string
+          maxLength: 200
+          description: Required on every version of an email template, and refused on an SMS one.
+        body:
+          type: string
+          maxLength: 100000
+
+    Template:
+      type: object
+      required: [id, name, channel, current_version, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          examples: [tmpl_13jprr39jzhs]
+        name:
+          type: string
+        channel:
+          $ref: '#/components/schemas/Channel'
+        current_version:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    TemplateWithBody:
+      allOf:
+        - $ref: '#/components/schemas/Template'
+        - type: object
+          properties:
+            subject:
+              type: [string, 'null']
+            body:
+              type: string
+
+    TemplateVersion:
+      type: object
+      required: [id, template_id, version, subject, body, created_at]
+      properties:
+        id:
+          type: string
+        template_id:
+          type: string
+        version:
+          type: integer
+        subject:
+          type: [string, 'null']
+        body:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    Suppression:
+      type: object
+      required: [address, reason, created_at]
+      properties:
+        address:
+          type: string
+        reason:
+          $ref: '#/components/schemas/SuppressionReason'
+        created_at:
+          type: string
+          format: date-time
+
+    Webhook:
+      type: object
+      required: [id, url, events, active, created_at]
+      properties:
+        id:
+          type: string
+          examples: [wh_0g389xqn9q]
+        url:
+          type: string
+          format: uri
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/EventType'
+        active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+
+    WebhookWithSecret:
+      allOf:
+        - $ref: '#/components/schemas/Webhook'
+        - type: object
+          required: [secret]
+          properties:
+            secret:
+              type: string
+              description: The signing secret. It is in this answer only.
+              examples: [whsec_9wxm11zn2gmr1qxbntspgg907f3w6pxz]
+
+    WebhookDelivery:
+      type: object
+      required: [id, event_id, event_type, status, attempts, last_error, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        event_id:
+          type: string
+        event_type:
+          $ref: '#/components/schemas/EventType'
+        status:
+          type: string
+          enum: [pending, succeeded, failed]
+        attempts:
+          type: integer
+        last_error:
+          type: [string, 'null']
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    EventDelivery:
+      type: object
+      required: [id, type, occurred_at, data]
+      properties:
+        id:
+          type: string
+          description: The event id. Two posts of the same event carry the same one.
+        type:
+          type: string
+          description: The event type, prefixed `message.`.
+          examples: [message.delivered]
+        occurred_at:
+          type: string
+          format: date-time
+        data:
+          type: object
+          required: [message_id, channel, to, status, tags, detail]
+          properties:
+            message_id:
+              type: [string, 'null']
+            channel:
+              oneOf:
+                - $ref: '#/components/schemas/Channel'
+                - type: 'null'
+            to:
+              type: [string, 'null']
+            status:
+              oneOf:
+                - $ref: '#/components/schemas/MessageStatus'
+                - type: 'null'
+            tags:
+              type: array
+              items:
+                type: string
+            detail:
+              type: [string, 'null']
+
+    Account:
+      type: object
+      required: [id, name, plan, limits, usage, created_at]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        plan:
+          type: string
+          enum: [trial, starter, growth, scale]
+        limits:
+          type: object
+          required: [messages_included_per_month, requests_per_minute, batch_size]
+          properties:
+            messages_included_per_month:
+              type: integer
+            requests_per_minute:
+              type: integer
+            batch_size:
+              type: integer
+        usage:
+          type: object
+          required: [period_start, messages, email, sms]
+          properties:
+            period_start:
+              type: string
+              format: date-time
+            messages:
+              type: integer
+            email:
+              type: integer
+            sms:
+              type: integer
+        created_at:
+          type: string
+          format: date-time

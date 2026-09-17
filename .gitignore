@@ -1,0 +1,8 @@
+node_modules
+dist
+clients/node/dist
+data/store.json
+data/store.json.tmp
+*.log
+.env
+.env.local
