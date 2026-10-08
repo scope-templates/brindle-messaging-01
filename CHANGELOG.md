@@ -13,7 +13,7 @@ Wrong in what is deployed now, filed and not fixed yet.
 - Webhook attempts only go out when the delivery loop passes, which is every 45 seconds. The first
   attempt can wait up to 45 seconds rather than going straight away, the 2- and 10-second waits
   each come to 45, and the sixth attempt goes out nearly nineteen minutes after the first, not
-  sixteen. (BRN-38)
+  sixteen. The README and `docs/events-and-webhooks.md` still promise sixteen. (BRN-38)
 - `GET /v1/messages?status=queued` (or `sent`) cannot be walked while messages are moving. Once
   the message a cursor points at changes status it drops out of the filtered list, and the next
   page is refused with `invalid_request`. Walks without `status`, or on `delivered`, `bounced` or

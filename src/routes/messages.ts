@@ -83,6 +83,7 @@ export function messageRoutes(store: Store, carrier: Carrier): Router {
       .filter((message) => (status ? message.status === status : true))
       .filter((message) => (channel ? message.channel === channel : true));
 
+    // FIXME(BRN-55): a cursor row that has changed status is gone from `rows`, so the walk is refused.
     const cut = paginate(rows, page);
     response.json({ data: cut.data.map(publicMessage), next_cursor: cut.next_cursor });
   });
