@@ -78,6 +78,9 @@ They run in memory against a small Brindle of their own — two accounts, three 
 messages — and start a server on a spare port for the ones that go over HTTP. Nothing touches
 `data/`, so running them on a machine that has a store on it leaves the store alone.
 
+How we work, from ticket keys to what goes in a commit, is in `CONTRIBUTING.md`. What we know is
+wrong and have not fixed yet is under Known issues at the top of `CHANGELOG.md`.
+
 ## The data
 
 An empty `DATA_DIR` fills itself on first start from `data/seed.json`, which is twelve months to
