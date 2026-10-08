@@ -39,8 +39,10 @@ because the reply goes to the carrier rather than to us.
 In a batch it is one `rejected` row with `"code": "recipient_suppressed"`; the rest of the batch
 goes.
 
-The check runs before the template is rendered, so a suppressed recipient is refused for that
-reason even if the request is wrong in other ways too.
+The check runs after the request has been read, the address checked and, for an email written out
+in the request, the subject found; a request that fails one of those is refused for that first. It
+runs before anything to do with the template, so a suppressed recipient is refused as suppressed
+even if the template is missing, is on the other channel or is short of a variable.
 
 ## Reading the list
 
