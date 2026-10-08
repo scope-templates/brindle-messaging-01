@@ -6,6 +6,7 @@
 import { attemptDelivery, isDue, type Poster } from './webhooks.js';
 import type { Store } from './store.js';
 
+// FIXME(BRN-38): attempts only go out on this tick, so the 2s and 10s backoffs each stretch to 45s.
 export const EVERY_MS = 45_000;
 export const FIRST_RUN_AFTER_MS = 5_000;
 export const PRUNE_EVERY_MS = 24 * 60 * 60 * 1000;
