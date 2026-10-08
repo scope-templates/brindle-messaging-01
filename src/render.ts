@@ -50,6 +50,7 @@ export function renderVersion(
   variables: Record<string, string>,
 ): Rendered {
   return {
+    // FIXME(BRN-47): a subject is plain text, but `fill` escapes its values for HTML on email.
     subject: version.subject === null ? null : fill(version.subject, variables, channel),
     body: fill(version.body, variables, channel),
   };

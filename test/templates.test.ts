@@ -103,4 +103,22 @@ describe('templates', () => {
     expect(asItWent.version).toBe(1);
     expect(asItWent.subject).toBe('Your order W-3300');
   });
+
+  it.skip('fills an email subject with values as they are, because a subject is not HTML (BRN-47)', async () => {
+    const response = await fetch(`${api.url}/v1/templates/${DISPATCH_TEMPLATE}/render`, {
+      method: 'POST',
+      headers: headers(),
+      body: JSON.stringify({
+        variables: {
+          first_name: 'Tom & Sons',
+          order_number: 'W-7781 & W-7782',
+          link: 'https://wainstall-cycles.co.uk/t/7781',
+        },
+      }),
+    });
+    const rendered = (await response.json()) as { subject: string; body: string };
+
+    expect(rendered.subject).toBe('W-7781 & W-7782 is on its way');
+    expect(rendered.body).toContain('Tom &amp; Sons');
+  });
 });
