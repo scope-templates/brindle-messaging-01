@@ -3,6 +3,22 @@
 The API is versioned by date. Every answer carries `Brindle-Version` with the version the
 deployment speaks. What a dated version promises is in [`docs/versioning.md`](docs/versioning.md).
 
+## Known issues
+
+Wrong in what is deployed now, filed and not fixed yet.
+
+- Values filled into an email template's subject are HTML-escaped as if the subject were HTML, so
+  `{{order_number}}` filled with `W-1 & W-2` renders as `W-1 &amp; W-2`. Only the body is HTML;
+  the subject should take values as they are. (BRN-47)
+- Webhook attempts only go out when the delivery loop passes, which is every 45 seconds. The first
+  attempt can wait up to 45 seconds rather than going straight away, the 2- and 10-second waits
+  each come to 45, and the sixth attempt goes out nearly nineteen minutes after the first, not
+  sixteen. (BRN-38)
+- `GET /v1/messages?status=queued` (or `sent`) cannot be walked while messages are moving. Once
+  the message a cursor points at changes status it drops out of the filtered list, and the next
+  page is refused with `invalid_request`. Walks without `status`, or on `delivered`, `bounced` or
+  `failed`, are not affected. (BRN-55)
+
 ## 2026-06-15
 
 Sending in bulk, and knowing what happened afterwards without asking us.
